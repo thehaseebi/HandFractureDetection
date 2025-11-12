@@ -20,21 +20,22 @@ except Exception as e:
 MODEL_PATH = "best.pt"
 FRACTURE_NAME = "fracture"
 
-# --- Page ---
+# --- Streamlit Page Config ---
 st.set_page_config(page_title="Hand Fracture Detector", layout="wide")
 st.markdown(
     """
-    <h1 style="margin-bottom:0.25rem;">Hand Fracture Detection System</h1>
-    <p style="color:gray; margin-top:0;">Upload a hand or wrist X-ray — the model detects if a fracture exists.</p>
+    <h1 style="text-align:center; color:#2E4053;">Hand Fracture Detection System</h1>
+    <p style="text-align:center; color:gray;">Upload a hand or wrist X-ray — the model detects if a fracture exists.</p>
+    <hr style="border: 1px solid #D6DBDF;">
     """,
     unsafe_allow_html=True,
 )
 
-# --- Session-unique ID (kept for uniqueness) ---
+# --- Session-unique ID ---
 if "run_id" not in st.session_state:
     st.session_state.run_id = uuid.uuid4().hex[:8]
 
-# --- Helpers ---
+# --- Helper functions ---
 def show_image(img, caption="Image"):
     try:
         st.image(img, caption=caption, use_container_width=True)
@@ -60,47 +61,32 @@ def find_fracture_id(names_dict, target=FRACTURE_NAME):
 def short_sha256(data_bytes, length=8):
     return hashlib.sha256(data_bytes).hexdigest()[:length]
 
-# --- Layout: single view, two columns side-by-side ---
-col_left, col_right = st.columns([1, 1.2], vertical_alignment="start")
-
-with col_left:
+# --- File Upload Section ---
+col1, col2 = st.columns([1, 2])
+with col1:
     uploaded_file = st.file_uploader(
         "Upload a hand X-ray image",
         type=["jpg", "jpeg", "png", "bmp", "webp"]
     )
 
-# placeholders for dynamic content (left text, right image)
-with col_left:
-    status_placeholder = st.empty()
-    meta_placeholder = st.empty()
-    download_placeholder = st.empty()
-
-with col_right:
-    image_placeholder = st.empty()
-
 if uploaded_file is not None:
-    # meta info
     file_bytes = uploaded_file.getvalue()
     img_hash = short_sha256(file_bytes)
-    meta_placeholder.markdown(f"File ID: `{img_hash}`  |  Session: `{st.session_state.run_id}`")
+    st.markdown(f"**File ID:** `{img_hash}` | **Session:** `{st.session_state.run_id}`")
 
-    # temp save
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
         tmp_file.write(file_bytes)
         temp_image_path = tmp_file.name
 
-    # predict (fixed internal threshold; not exposed in UI)
     model = load_model()
-    with status_placeholder.container():
-        st.write("Running detection...")
-
-    results = model.predict(
-        source=temp_image_path,
-        conf=0.25,
-        save=False,
-        show=False,
-        verbose=False
-    )
+    with st.spinner("Detecting possible fractures..."):
+        results = model.predict(
+            source=temp_image_path,
+            conf=0.25,  # fixed internally
+            save=False,
+            show=False,
+            verbose=False
+        )
 
     res = results[0]
     names = res.names
@@ -118,23 +104,18 @@ if uploaded_file is not None:
             fracture_found = True
             top_conf = float(np.max(conf[idxs]))
 
-    # Update left-side status directly under uploader
-    if fracture_found:
-        status_placeholder.success(f"Fracture detected (confidence: {top_conf:.2f})")
-    else:
-        if fracture_id is None:
-            status_placeholder.warning(f"Class '{FRACTURE_NAME}' not found in model labels: {list(names.values())}")
-        else:
-            status_placeholder.info("No fracture detected.")
+    # --- Result Layout ---
+    st.markdown("<hr>", unsafe_allow_html=True)
+    colR1, colR2 = st.columns(2)
 
-    # Right-side: annotated image only when fracture detected
-    result_image_pil = None
     if fracture_found:
-        try:
+        with colR1:
+            st.success(f"✅ Fracture detected (Confidence: {top_conf:.2f})")
+
+        with colR2:
             import cv2
             img_pil = Image.open(temp_image_path).convert("RGB")
             img_np = np.array(img_pil)
-
             xyxy = res.boxes.xyxy.cpu().numpy()
             confs = res.boxes.conf.cpu().numpy()
             img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
@@ -148,7 +129,6 @@ if uploaded_file is not None:
                 cv2.putText(img_bgr, label, (x1 + 3, y1 - 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
 
-            # subtle watermark for uniqueness
             wm_text = f"Fracture Detector | Run {st.session_state.run_id}"
             (twm, thm), _ = cv2.getTextSize(wm_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             h, w = img_bgr.shape[:2]
@@ -157,26 +137,18 @@ if uploaded_file is not None:
 
             img_rgb_out = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
             result_image_pil = Image.fromarray(img_rgb_out)
-            image_placeholder.image(result_image_pil, caption="Detected Fracture", use_container_width=True)
+            show_image(result_image_pil, "Detected Fracture")
 
-            # download button under status on the left
             output_path = f"fracture_result_{img_hash}.jpg"
             result_image_pil.save(output_path)
             with open(output_path, "rb") as f:
-                download_placeholder.download_button(
-                    "Download Annotated Image",
-                    f,
-                    file_name=output_path,
-                    mime="image/jpeg"
-                )
-        except Exception as e:
-            # fallback to model plot
-            plotted = res.plot()
-            result_image_pil = Image.fromarray(plotted)
-            image_placeholder.image(result_image_pil, caption="Detected Fracture", use_container_width=True)
+                st.download_button("Download Annotated Image", f, file_name=output_path, mime="image/jpeg")
+    else:
+        st.warning("No fracture detected.")
 
-    # cleanup
     try:
         os.remove(temp_image_path)
     except Exception:
         pass
+else:
+    st.info("Please upload an image to start detection.")
