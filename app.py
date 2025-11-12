@@ -4,6 +4,9 @@ import numpy as np
 from PIL import Image
 import streamlit as st
 import tempfile
+import hashlib
+import uuid
+from datetime import datetime
 
 os.environ["YOLO_VERBOSE"] = "False"
 
@@ -13,15 +16,25 @@ except Exception as e:
     st.error("Ultralytics not installed. Run: pip install ultralytics")
     raise e
 
-# ----- Config -----
+# ----- Config (defaults) -----
 MODEL_PATH = "best.pt"          # hand-fracture-only weights
-FRACTURE_NAME = "fracture"      # expected class name in your model
-CONF_THRESH = 0.25              # default confidence threshold
+DEFAULT_FRACTURE_NAME = "fracture"
+DEFAULT_CONF_THRESH = 0.25
 
 # --- Streamlit Page Config ---
 st.set_page_config(page_title="Hand Fracture: Yes/No", layout="centered")
 st.title("Hand Fracture Detector")
-st.caption("Upload a hand/wrist X-ray. The model looks **only** for the 'fracture' class.")
+st.caption("Upload a hand/wrist X-ray. The model looks **only** for the specified class (default: 'fracture').")
+
+# --- Session-unique ID (uniqueness) ---
+if "run_id" not in st.session_state:
+    st.session_state.run_id = uuid.uuid4().hex[:8]
+
+# --- Sidebar: Unique settings panel (uniqueness) ---
+st.sidebar.header("Settings")
+FRACTURE_NAME = st.sidebar.text_input("Target class", value=DEFAULT_FRACTURE_NAME)
+CONF_THRESH = st.sidebar.slider("Confidence threshold", 0.05, 0.95, DEFAULT_CONF_THRESH, 0.05)
+st.sidebar.caption(f"Run ID: {st.session_state.run_id}")
 
 # Safe image display (handles different Streamlit versions)
 def show_image(img, caption="Image"):
@@ -46,15 +59,21 @@ def find_fracture_id(names_dict, target=FRACTURE_NAME):
             return cid
     return None
 
+def short_sha256(data_bytes, length=8):
+    return hashlib.sha256(data_bytes).hexdigest()[:length]
+
 # --- File Uploader ---
 uploaded_file = st.file_uploader("Upload a hand X-ray image", type=["jpg", "jpeg", "png", "bmp", "webp"])
 
 if uploaded_file is not None:
-    # NOTE: Do NOT show the original image (per your request)
+    # Minimal uniqueness: show a short fingerprint of the image
+    file_bytes = uploaded_file.getvalue()
+    img_hash = short_sha256(file_bytes)
+    st.text(f"Image fingerprint: {img_hash}")
 
     # Save uploaded image temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
-        tmp_file.write(uploaded_file.getvalue())
+        tmp_file.write(file_bytes)
         temp_image_path = tmp_file.name
 
     # --- Load model & Run prediction on temp path ---
@@ -111,7 +130,7 @@ if uploaded_file is not None:
 
             for i in idxs:  # draw ONLY fracture boxes
                 x1, y1, x2, y2 = xyxy[i].astype(int)
-                label = f"{names.get(fracture_id, 'fracture')} {confs[i]:.2f}"
+                label = f"{names.get(fracture_id, FRACTURE_NAME)} {confs[i]:.2f}"
                 # box
                 cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 255, 255), 2)
                 # label bg
@@ -121,12 +140,23 @@ if uploaded_file is not None:
                 cv2.putText(img_bgr, label, (x1 + 3, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
                             0.6, (0, 0, 0), 2, cv2.LINE_AA)
 
+            # Minimal watermark (uniqueness)
+            wm = f"Hand Fracture Detector • Run {st.session_state.run_id}"
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+            wm_text = f"{wm} • {ts}"
+            (twm, thm), _ = cv2.getTextSize(wm_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            h, w = img_bgr.shape[:2]
+            pad = 8
+            cv2.rectangle(img_bgr, (w - twm - 2*pad, h - thm - 2*pad), (w - pad, h - pad), (0, 0, 0), -1)
+            cv2.putText(img_bgr, wm_text, (w - twm - pad, h - pad - 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
             img_rgb_out = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
             show_image(img_rgb_out, "Detected Fracture")
             result_image_pil = Image.fromarray(img_rgb_out)
 
         except Exception as e:
-            # Fallback: use model's plot (should still only show fracture in your model)
+            # Fallback: use model's plot
             st.warning(f"Could not highlight boxes automatically ({e}). Showing model output.")
             plotted = res.plot()
             result_image_pil = Image.fromarray(plotted)
@@ -139,13 +169,13 @@ if uploaded_file is not None:
 
     # --- Download button ONLY if we created an annotated fracture image ---
     if result_image_pil is not None:
-        output_path = "fracture_result.jpg"
+        output_path = f"fracture_result_{img_hash}.jpg"
         result_image_pil.save(output_path)
         with open(output_path, "rb") as f:
             st.download_button(
                 "Download Result",
                 f,
-                file_name="fracture_result.jpg",
+                file_name=output_path,
                 mime="image/jpeg"
             )
 
@@ -156,4 +186,4 @@ if uploaded_file is not None:
         pass
 
 else:
-    st.info("Upload an image to get a YES/NO answer for hand fractures.")
+    st.info("Upload an image")
