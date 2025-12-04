@@ -8,7 +8,7 @@ This project implements an end-to-end deep learning pipeline for **automated det
 
 ---
 
-## 🔍 Key Features
+## Key Features
 
 - **YOLO-based object detection** for hand fracture localization on X-ray images  
 - **Streamlit web UI** for image upload, visualization, and real-time predictions  
@@ -18,7 +18,7 @@ This project implements an end-to-end deep learning pipeline for **automated det
 
 ---
 
-## 🧠 Tech Stack
+## Tech Stack
 
 - **Model:** YOLO (fine-tuned on hand-fracture dataset)  
 - **Frontend:** Streamlit  
@@ -27,7 +27,7 @@ This project implements an end-to-end deep learning pipeline for **automated det
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```bash
 yolo-hand-fracture-detection/
